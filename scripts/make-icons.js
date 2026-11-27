@@ -24,7 +24,27 @@ function png(w, h, rgba) {
 }
 
 // Shapes in unit space (0..1) around a centred glyph; `scale` shrinks the glyph about the centre.
-function sample(u, v, { bg, scale, play }) {
+// distance from point to segment
+function segDist(px, py, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay, t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy)));
+  return Math.hypot(px - ax - t * vx, py - ay - t * vy);
+}
+// eighth note (white), sitting in the upper part of the ribbon
+function inNote(x, y) {
+  const a = -0.38, dx = x - .468, dy = y - .565;                       // tilted oval head
+  const xr = dx * Math.cos(a) + dy * Math.sin(a), yr = -dx * Math.sin(a) + dy * Math.cos(a);
+  if ((xr / .058) ** 2 + (yr / .041) ** 2 <= 1) return true;
+  if (x >= .506 && x <= .526 && y >= .295 && y <= .56) return true;      // stem
+  if (x >= .516 && y >= .295) {                                          // flag: filled curved wedge
+    const t = (y - .295) / .16;                                          // 0 at top → 1 at tail
+    if (t <= 1) { const right = .526 + .07 * Math.sin(Math.PI * .5 * Math.min(1, t * 1.35)) - .012 * Math.max(0, t - .7) / .3;
+      const left = .526 + .062 * Math.max(0, t - .32) / .68;
+      if (x >= left && x <= right) return true; }
+  }
+  return false;
+}
+
+function sample(u, v, { bg, scale, play, note = true }) {
   // background mask
   let inBg = false;
   if (bg === 'square') inBg = true;
@@ -37,6 +57,7 @@ function sample(u, v, { bg, scale, play }) {
   const sgn = (p, a, b) => (p[0] - b[0]) * (a[1] - b[1]) - (a[0] - b[0]) * (p[1] - b[1]);
   const d1 = sgn([x, y], tri[0], tri[1]), d2 = sgn([x, y], tri[1], tri[2]), d3 = sgn([x, y], tri[2], tri[0]);
   if (play && !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))) return WHITE;
+  if (note && inNote(x, y)) return WHITE;
   // bookmark ribbon
   if (x >= .34 && x <= .66 && y >= .2) {
     const notch = .80 - .14 * (1 - Math.abs(x - .5) / .16);
