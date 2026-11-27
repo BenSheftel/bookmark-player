@@ -52,8 +52,6 @@ button { font: inherit; color: inherit; }
 .row-title { font-weight: 600; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-sub { color: var(--muted); font-size: 13px; }
 .empty { color: var(--muted); text-align: center; padding: 48px 24px; margin: 0; }
-.foot { text-align: center; margin: 16px 0; font-size: 14px; }
-.foot a { color: var(--muted); }
 .empty.small { padding: 24px; font-size: 14px; }
 
 /* ---------- player ---------- */
