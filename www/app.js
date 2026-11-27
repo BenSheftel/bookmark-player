@@ -649,7 +649,8 @@ async function startApp() {
   await refreshLibrary();
   const last = readLast();
   const s = last && songs.find(x => x.id === last.songId);
-  if (s) await openSong(s, { at: last.time || 0 });
+  // Restore the last song into the mini player, but open on the library so Back behaves normally.
+  if (s) await openSong(s, { at: last.time || 0, show: false });
 }
 
 (() => {
