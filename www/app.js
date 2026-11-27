@@ -88,15 +88,36 @@ const currentPos = () => pendingSeek ?? audio.currentTime ?? 0;
 /* ============================================================
    Views + Android back button (via history)
    ============================================================ */
+// Chrome's back button skips history entries a page adds before the user has touched it,
+// so when the app opens straight into the player we add the entry on the first tap instead.
+let userActivated = false, pendingPlayerEntry = false;
+const pushPlayerEntry = () => { if (location.hash !== '#player') history.pushState(null, '', '#player'); };
+for (const ev of ['pointerdown', 'keydown']) {
+  window.addEventListener(ev, () => {
+    userActivated = true;
+    if (pendingPlayerEntry) {
+      pendingPlayerEntry = false;
+      if ($('#view-player').classList.contains('active')) pushPlayerEntry();
+    }
+  }, { capture: true });
+}
+
 function showView(name, push = true) {
   for (const v of document.querySelectorAll('.view')) v.classList.toggle('active', v.id === 'view-' + name);
-  if (push && name === 'player' && location.hash !== '#player') history.pushState(null, '', '#player');
+  if (push && name === 'player') {
+    if (userActivated) pushPlayerEntry(); else pendingPlayerEntry = true;
+  }
+  if (name !== 'player') pendingPlayerEntry = false;
   if (name === 'library') refreshLibrary();
   window.scrollTo(0, 0);
 }
 window.addEventListener('popstate', () => {
   if (!started) return;
-  if ($('#bm-dialog').open) $('#bm-dialog').close();
+  if ($('#bm-dialog').open) {             // Back closes the edit box, not the song
+    $('#bm-dialog').close();
+    if ($('#view-player').classList.contains('active')) pushPlayerEntry();
+    return;
+  }
   showView(location.hash === '#player' && current ? 'player' : 'library', false);
 });
 $('#back-btn').onclick = () => {
