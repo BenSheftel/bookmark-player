@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Seek Latency Test</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px; background: #0f1318; color: #e8edf3; font: 15px/1.45 system-ui, -apple-system, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p { color: #8e99a8; margin: 0 0 14px; }
+  .btn { display: inline-flex; align-items: center; min-height: 46px; padding: 0 16px; border-radius: 12px; border: 0;
+    background: #f5a524; color: #1a1203; font: inherit; font-weight: 700; margin: 0 8px 10px 0; }
+  .btn.alt { background: #202732; color: #e8edf3; border: 1px solid #2a323e; }
+  .btn:disabled { opacity: .5; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #171c23; border: 1px solid #2a323e; border-radius: 12px;
+    padding: 12px; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+<h1>Seek latency test</h1>
+<p>Pick one of your songs. It plays a few short snippets (volume up a bit), measuring how long seeking and starting playback take on this device, using the same playback path as Bookmark Player. Takes about 20&nbsp;seconds.</p>
+<label class="btn" for="f">Pick a song &amp; run</label><input id="f" type="file" accept="audio/*" hidden>
+<button class="btn alt" id="copy" disabled>Copy results</button>
+<pre id="log">Results will appear here.</pre>
+<script>
+const out = document.getElementById('log');
+const log = s => { out.textContent += s + '\n'; };
+const now = () => performance.now();
+const tick = () => new Promise(r => { const c = new MessageChannel(); c.port1.onmessage = r; c.port2.postMessage(0); });
+const sleep = async ms => { const t = now(); while (now() - t < ms) await new Promise(r => setTimeout(r, 5)); };
+const once = (el, ev, ms = 10000) => new Promise((res, rej) => {
+  const t = setTimeout(() => rej(new Error('timeout waiting for ' + ev)), ms);
+  el.addEventListener(ev, () => { clearTimeout(t); res(now()); }, { once: true });
+});
+/* playback clock starts moving = the audio pipeline is delivering samples */
+async function advanced(a, from, ms = 10000) {
+  const t0 = now();
+  while (!(a.currentTime > from + 0.001)) { if (now() - t0 > ms) throw new Error('playback never started'); await tick(); }
+  return now();
+}
+const stats = a => { const s = [...a].sort((x, y) => x - y); return `median ${s[s.length >> 1].toFixed(0)} ms, worst ${s[s.length - 1].toFixed(0)} ms`; };
+async function viaIDB(blob) {           // same storage path as the app
+  const r = (q) => new Promise((res, rej) => { q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+  const open = indexedDB.open('latency-test', 1);
+  open.onupgradeneeded = () => open.result.createObjectStore('f');
+  const db = await r(open);
+  await r(db.transaction('f', 'readwrite').objectStore('f').put(blob, 'x'));
+  const back = await r(db.transaction('f').objectStore('f').get('x'));
+  return back;
+}
+
+document.getElementById('f').addEventListener('change', async e => {
+  const file = e.target.files[0]; e.target.value = '';
+  if (!file) return;
+  document.getElementById('copy').disabled = true;
+  out.textContent = '';
+  log(`Device: ${navigator.userAgent}`);
+  log(`File: ${file.name} (${(file.size / 1e6).toFixed(1)} MB, ${file.type || 'unknown type'})`);
+  try {
+    let ctxInfo = '';
+    try { const c = new (window.AudioContext || window.webkitAudioContext)();
+      ctxInfo = `base ${((c.baseLatency || 0) * 1000).toFixed(0)} ms, output ${((c.outputLatency || 0) * 1000).toFixed(0)} ms`; c.close(); } catch {}
+    if (ctxInfo) log(`Audio hardware latency estimate: ${ctxInfo}`);
+
+    const blob = await viaIDB(file);
+    const url = URL.createObjectURL(blob);
+
+    // 1) Cold start: fresh player, seek requested before anything loaded, then play (like opening a song / app launch)
+    const a = new Audio(); a.preload = 'metadata';
+    let t = now();
+    a.src = url;
+    const target0 = 30;
+    const metaP = once(a, 'loadedmetadata');
+    a.play().catch(() => {});                 // in the click/gesture window, as on iOS
+    await metaP; a.currentTime = Math.min(target0, a.duration / 2);
+    await advanced(a, a.currentTime);
+    const cold = now() - t;
+    await sleep(400); a.pause(); await sleep(200);
+    const dur = a.duration;
+    log(`Duration: ${dur.toFixed(1)} s\n`);
+    log(`Cold start (load + seek + play → sound): ${cold.toFixed(0)} ms`);
+
+    const targets = [0.1, 0.8, 0.35, 0.6, 0.05, 0.9, 0.5, 0.2].map(f => +(f * dur).toFixed(1));
+    const pausedSeek = [], playAfter = [], liveSeek = [];
+    for (const tg of targets) {               // 2) bookmark tap while paused, then press play
+      t = now(); a.currentTime = tg; await once(a, 'seeked'); pausedSeek.push(now() - t);
+      t = now(); a.play(); await advanced(a, tg); playAfter.push(now() - t);
+      await sleep(350); a.pause(); await sleep(200);
+    }
+    a.play(); await advanced(a, a.currentTime);
+    for (const tg of targets) {               // 3) seek / skip while already playing
+      t = now(); a.currentTime = tg; await once(a, 'seeked'); await advanced(a, tg); liveSeek.push(now() - t);
+      await sleep(350);
+    }
+    a.pause(); URL.revokeObjectURL(url);
+    log(`Seek while paused (bookmark tap):      ${stats(pausedSeek)}`);
+    log(`Press play after seek → sound:         ${stats(playAfter)}`);
+    log(`Seek while playing (±10s / bookmark):  ${stats(liveSeek)}`);
+    log(`\nNote: real speaker output lags the numbers above by roughly the "output" hardware latency.`);
+  } catch (err) {
+    log(`\nERROR: ${err.message}`);
+  }
+  document.getElementById('copy').disabled = false;
+});
+document.getElementById('copy').onclick = async () => {
+  try { await navigator.clipboard.writeText(out.textContent); document.getElementById('copy').textContent = 'Copied ✓'; }
+  catch { const r = document.createRange(); r.selectNodeContents(out); getSelection().removeAllRanges(); getSelection().addRange(r); }
+};
+</script>
+</body>
+</html>
