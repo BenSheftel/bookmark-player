@@ -1,0 +1,18 @@
+{
+  "name": "bookmark-player",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Offline music player with per-song timestamp bookmarks (PWA + Android APK via Capacitor)",
+  "scripts": {
+    "serve": "node scripts/serve.js 5199",
+    "icons": "node scripts/make-icons.js",
+    "sync": "cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.3",
+    "@capacitor/core": "^8.6.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.3"
+  }
+}

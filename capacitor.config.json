@@ -1,0 +1,9 @@
+{
+  "appId": "com.bookmarkplayer.app",
+  "appName": "Bookmark Player",
+  "webDir": "www",
+  "backgroundColor": "#0f1318",
+  "android": {
+    "allowMixedContent": false
+  }
+}
