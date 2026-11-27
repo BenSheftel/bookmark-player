@@ -1,7 +1,8 @@
 // Offline cache for the PWA (iOS / browser install). Bump VERSION when files change.
-const VERSION = 'bp-v3';
+const VERSION = 'bp-v4';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest',
-  'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
+  'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
+  'fonts/inter-normal.woff2', 'fonts/fraunces-normal.woff2', 'fonts/fraunces-italic.woff2'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

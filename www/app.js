@@ -7,6 +7,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const stripExt = n => n.replace(/\.[^./\\]+$/, '');
+const icon = name => `<svg class="ic"><use href="#i-${name}"/></svg>`;
 
 function fmt(t, precise = false) {
   if (!isFinite(t) || t < 0) t = 0;
@@ -94,6 +95,7 @@ function showView(name, push = true) {
   window.scrollTo(0, 0);
 }
 window.addEventListener('popstate', () => {
+  if (!started) return;
   if ($('#bm-dialog').open) $('#bm-dialog').close();
   showView(location.hash === '#player' && current ? 'player' : 'library', false);
 });
@@ -117,7 +119,7 @@ async function refreshLibrary() {
     const li = document.createElement('li');
     li.className = 'row' + (current?.id === s.id ? ' playing' : '');
     li.innerHTML = '<button class="row-main"><span class="row-title"></span><span class="row-sub"></span></button>' +
-                   '<button class="btn icon danger" aria-label="Remove song">✕</button>';
+                   `<button class="btn icon danger" aria-label="Remove song">${icon('x')}</button>`;
     $('.row-title', li).textContent = s.name;
     const n = counts[s.id] || 0;
     $('.row-sub', li).textContent =
@@ -273,9 +275,9 @@ function updateTimeUI(t = currentPos()) {
 
 function updatePlayButton() {
   const playing = !audio.paused;
-  $('#play').textContent = playing ? '❚❚' : '▶';
+  $('#play').innerHTML = icon(playing ? 'pause' : 'play');
   $('#play').setAttribute('aria-label', playing ? 'Pause' : 'Play');
-  $('#mini-state').textContent = playing ? '❚❚' : '▶';
+  $('#mini-state').innerHTML = icon(playing ? 'pause' : 'play');
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
 }
 
@@ -320,14 +322,14 @@ function renderBookmarks(flashId) {
     const li = document.createElement('li');
     li.className = 'row' + (b.id === flashId ? ' flash' : '');
     li.innerHTML = '<button class="bm-jump"><span class="bm-time"></span><span class="bm-label"></span></button>' +
-                   '<button class="btn icon" aria-label="Edit bookmark">✎</button>' +
-                   '<button class="btn icon danger" aria-label="Delete bookmark">✕</button>';
+                   `<button class="btn icon" aria-label="Edit bookmark">${icon('edit')}</button>` +
+                   `<button class="btn icon danger" aria-label="Delete bookmark">${icon('x')}</button>`;
     $('.bm-time', li).textContent = fmt(b.time, true);
     $('.bm-label', li).textContent = b.label;
     $('.bm-jump', li).onclick = () => {
       seekTo(b.time);
       li.classList.remove('flash'); void li.offsetWidth; li.classList.add('flash');
-      if (audio.paused) toast(`Playhead at ${fmt(b.time, true)} — press ▶ to play`);
+      if (audio.paused) toast(`Playhead at ${fmt(b.time, true)}. Press play to start`);
     };
     li.children[1].onclick = () => openEditor(b);
     li.children[2].onclick = () => deleteBookmark(b);
@@ -357,7 +359,7 @@ $('#add-bm').onclick = async () => {
   await dbPut('bookmarks', b);
   await loadBookmarks();
   renderBookmarks(b.id);
-  toast(`Bookmarked ${fmt(time, true)} — tap ✎ to rename`);
+  toast(`Bookmarked ${fmt(time, true)}. Tap the pencil to rename`);
 };
 
 async function deleteBookmark(b) {
@@ -402,6 +404,67 @@ $('#bm-save').onclick = saveEditor;
 for (const inp of [$('#bm-label'), $('#bm-time')]) {
   inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveEditor(); } });
 }
+
+/* ============================================================
+   Bookmark packs: export / import a song's bookmarks as a .json file
+   ============================================================ */
+const PACK_FORMAT = 'bookmark-player-pack';
+const safeName = s => s.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').trim().slice(0, 80) || 'song';
+
+$('#export-bm').onclick = async () => {
+  if (!current) return;
+  if (!bookmarks.length) { toast('No bookmarks to export yet'); return; }
+  const pack = {
+    format: PACK_FORMAT, version: 1, exportedAt: new Date().toISOString(),
+    song: { name: current.name, fileName: current.fileName, duration: Math.round(knownDuration() * 10) / 10 },
+    bookmarks: bookmarks.map(b => ({ time: b.time, label: b.label })),
+  };
+  const fileName = `${safeName(current.name)} - bookmarks.json`;
+  const file = new File([JSON.stringify(pack, null, 2)], fileName, { type: 'application/json' });
+  // Share sheet where the platform allows it (iPhone: Save to Files, AirDrop, Messages...)
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: fileName }); return; }
+    catch (err) { if (err.name === 'AbortError') return; }
+  }
+  // Otherwise a normal download (Android: Downloads folder)
+  const url = URL.createObjectURL(file);
+  const a = Object.assign(document.createElement('a'), { href: url, download: fileName });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 15000);
+  toast(`Saved “${fileName}”`);
+};
+
+$('#import-input').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f || !current) return;
+  let pack;
+  try { pack = JSON.parse(await f.text()); } catch { pack = null; }
+  if (pack?.format !== PACK_FORMAT || !Array.isArray(pack.bookmarks)) {
+    alert('That file isn’t a bookmark pack. Pick a “… - bookmarks.json” file exported from this app.');
+    return;
+  }
+  if (pack.song?.name && pack.song.name !== current.name &&
+      !confirm(`This pack was made for “${pack.song.name}”.\n\nImport its ${pack.bookmarks.length} bookmark(s) into “${current.name}” anyway?`)) return;
+
+  const dur = knownDuration();
+  let added = 0, dupes = 0, outOfRange = 0;
+  for (const raw of pack.bookmarks) {
+    let t = typeof raw?.time === 'string' ? parseTime(raw.time) : Number(raw?.time);
+    if (t == null || !isFinite(t) || t < 0 || (dur && t > dur + 0.05)) { outOfRange++; continue; }
+    t = Math.round(t * 10) / 10;
+    const label = String(raw.label ?? '').trim().slice(0, 80) || `Bookmark at ${fmt(t, true)}`;
+    if (bookmarks.some(b => Math.abs(b.time - t) < 0.05 && b.label === label)) { dupes++; continue; }
+    const b = { id: uid(), songId: current.id, time: t, label, createdAt: Date.now() };
+    await dbPut('bookmarks', b);
+    bookmarks.push(b);
+    added++;
+  }
+  await loadBookmarks();
+  toast([`Imported ${added} bookmark${added === 1 ? '' : 's'}`,
+         dupes && `${dupes} already here`, outOfRange && `${outOfRange} skipped (outside this song’s length)`]
+    .filter(Boolean).join(' · '));
+});
 
 /* ============================================================
    Mini player (library screen)
@@ -456,13 +519,125 @@ function registerServiceWorker() {
   navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW failed', err));
 }
 
-(async () => {
-  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+/* ---------- Install gate: the player only runs as an installed app ---------- */
+let deferredInstall = null;   // Chrome/Edge/Samsung one-tap install prompt
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredInstall = e;
+  $('#install-btn').hidden = false;
+});
+window.addEventListener('appinstalled', () => {
+  $('#install-btn').hidden = true;
+  $('#install-steps').innerHTML = '<li class="done">Installed! Open <b>Bookmarks</b> from your home screen.</li>';
+});
+
+function isInstalled() {
+  if (window.Capacitor) return true;                       // Android APK build
+  if (navigator.standalone === true) return true;          // iOS home-screen app
+  return ['standalone', 'fullscreen', 'minimal-ui', 'window-controls-overlay']
+    .some(m => matchMedia(`(display-mode: ${m})`).matches);
+}
+
+function detectPlatform() {
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const android = /Android/.test(ua);
+  const inApp = /FBAN|FBAV|FB_IAB|Instagram|Line\/|Twitter|Snapchat|TikTok|musical_ly|BytedanceWebview|Pinterest|LinkedInApp|GSA\//.test(ua)
+    || (android && /; wv\)/.test(ua));
+  let browser = 'other';
+  if (ios) browser = /CriOS/.test(ua) ? 'chrome' : /FxiOS/.test(ua) ? 'firefox' : /EdgiOS/.test(ua) ? 'edge' : /Safari/.test(ua) ? 'safari' : 'other';
+  else if (/SamsungBrowser/.test(ua)) browser = 'samsung';
+  else if (/Firefox\//.test(ua)) browser = 'firefox';
+  else if (/EdgA?\//.test(ua)) browser = 'edge';
+  else if (/OPR\/|Opera/.test(ua)) browser = 'opera';
+  else if (/Chrome\//.test(ua)) browser = 'chrome';
+  else if (/Safari\//.test(ua)) browser = 'safari';
+  return { os: ios ? 'ios' : android ? 'android' : 'desktop', browser, inApp };
+}
+
+function installSteps({ os, browser, inApp }) {
+  const share = icon('share'), dots = icon('dots');
+  const openApp = 'Open <b>Bookmarks</b> from your home screen. That’s the app; this browser tab isn’t needed after.';
+  if (inApp) return {
+    steps: [os === 'ios'
+      ? 'This page is open inside another app. Tap the <b>···</b> or share menu and choose <b>Open in Safari</b> (or Open in browser).'
+      : `This page is open inside another app. Tap the ${dots} menu and choose <b>Open in Chrome</b> (or Open in browser).`,
+      'Follow the install steps shown there.'],
+    note: 'Or copy the link below and paste it into your browser.', link: true,
+  };
+  if (os === 'ios') {
+    if (browser === 'safari') return { steps: [
+      `Tap the <b>Share</b> button ${share}. It’s in the toolbar, or inside the <b>···</b> menu on newer iPhones.`,
+      'Scroll down and tap <b>Add to Home Screen</b>.',
+      'Keep <b>Open as Web App</b> switched on, then tap <b>Add</b>.', openApp] };
+    return { steps: [
+      `Tap the <b>Share</b> button ${share} in the address bar${browser === 'firefox' ? ' (or in the menu)' : ''}.`,
+      'Tap <b>Add to Home Screen</b>, then <b>Add</b>.', openApp],
+      note: 'Don’t see “Add to Home Screen”? Open this page in Safari and do it from there.', link: true };
+  }
+  if (os === 'android') {
+    const steps = {
+      chrome: [`Tap the ${dots} menu at the top right.`, 'Tap <b>Add to Home screen</b> (or <b>Install app</b>), then <b>Install</b>.'],
+      edge: ['Tap the <b>···</b> menu at the bottom.', 'Tap <b>Add to phone</b>, then <b>Install</b>.'],
+      samsung: ['Tap the <b>☰</b> menu at the bottom right.', 'Tap <b>Add page to</b>, then <b>Home screen</b>.'],
+      firefox: [`Tap the ${dots} menu.`, 'Tap <b>Add app to Home screen</b> (or <b>Add to Home screen</b>), then <b>Add</b>.'],
+      opera: [`Tap the ${dots} menu.`, 'Tap <b>Add to</b>, then <b>Home screen</b>.'],
+    }[browser] || [`Open your browser’s ${dots} menu.`, 'Choose <b>Add to Home screen</b> or <b>Install app</b>.'];
+    return { steps: [...steps, openApp],
+      note: browser === 'other' ? 'Works best in Chrome. If you can’t find the option, open this page in Chrome.' : '' };
+  }
+  return {
+    steps: ['This app is made for your phone. Open this page on your iPhone or Android phone and follow the steps there.',
+      'On a computer, Chrome and Edge can also install it from the install icon at the right of the address bar.'],
+    link: true };
+}
+
+function showInstallGate() {
+  const info = installSteps(detectPlatform());
+  $('#install-steps').innerHTML = info.steps.map(s => `<li>${s}</li>`).join('');
+  $('#install-note').hidden = !info.note;
+  $('#install-note').textContent = info.note || '';
+  $('#install-link').hidden = !info.link;
+  $('#install-url').textContent = location.origin + location.pathname;
+  $('#install-btn').hidden = !deferredInstall;
+  for (const v of document.querySelectorAll('.view')) v.classList.toggle('active', v.id === 'view-install');
+}
+$('#install-btn').onclick = async () => {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  await deferredInstall.userChoice.catch(() => {});
+  deferredInstall = null;
+};
+$('#copy-url').onclick = async () => {
+  try { await navigator.clipboard.writeText($('#install-url').textContent); toast('Link copied'); }
+  catch { toast('Press and hold the link to copy it'); }
+};
+$('#install-skip').onclick = () => {
+  try { localStorage.setItem('bp:skipGate', '1'); } catch {}
+  startApp();
+};
+
+/* ---------- App start ---------- */
+let started = false;
+async function startApp() {
+  if (started) return;
+  started = true;
+  showView('library', false);
   try { await navigator.storage?.persist?.(); } catch {}
   setupMediaSession();
   await refreshLibrary();
   const last = readLast();
   const s = last && songs.find(x => x.id === last.songId);
   if (s) await openSong(s, { at: last.time || 0 });
-  registerServiceWorker();
-})().catch(err => { console.error(err); alert('Startup error: ' + err.message); });
+}
+
+(() => {
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  const isLocal = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  const devBypass = isLocal && new URLSearchParams(location.search).has('app');   // local testing only
+  let skipped = false;
+  try { skipped = localStorage.getItem('bp:skipGate') === '1'; } catch {}
+  registerServiceWorker();   // cache the app for offline use, even from the install page
+  if (isInstalled() || devBypass || skipped) startApp().catch(err => { console.error(err); alert('Startup error: ' + err.message); });
+  else showInstallGate();
+})();

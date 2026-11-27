@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 
-const BG = [0x16, 0x1b, 0x22], ACCENT = [0xf5, 0xa5, 0x24], WHITE = [0xff, 0xff, 0xff];
+const BG = [0x0a, 0x0a, 0x0a], ACCENT = [0xff, 0x3d, 0x2e], WHITE = [0xff, 0xff, 0xff];
 
 const CRC = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
 const crc32 = buf => { let c = 0xffffffff; for (const b of buf) c = CRC[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
@@ -24,7 +24,7 @@ function png(w, h, rgba) {
 }
 
 // Shapes in unit space (0..1) around a centred glyph; `scale` shrinks the glyph about the centre.
-function sample(u, v, { bg, scale }) {
+function sample(u, v, { bg, scale, play }) {
   // background mask
   let inBg = false;
   if (bg === 'square') inBg = true;
@@ -36,7 +36,7 @@ function sample(u, v, { bg, scale }) {
   const tri = [[.445, .34], [.445, .52], [.59, .43]];
   const sgn = (p, a, b) => (p[0] - b[0]) * (a[1] - b[1]) - (a[0] - b[0]) * (p[1] - b[1]);
   const d1 = sgn([x, y], tri[0], tri[1]), d2 = sgn([x, y], tri[1], tri[2]), d3 = sgn([x, y], tri[2], tri[0]);
-  if (!((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))) return WHITE;
+  if (play && !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))) return WHITE;
   // bookmark ribbon
   if (x >= .34 && x <= .66 && y >= .2) {
     const notch = .80 - .14 * (1 - Math.abs(x - .5) / .16);
@@ -78,7 +78,7 @@ if (process.argv[2] === 'android') {
   }
   // adaptive icon background colour
   const bgXml = path.join(res, 'values/ic_launcher_background.xml');
-  write(bgXml, '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#161B22</color>\n</resources>\n');
+  write(bgXml, '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#0A0A0A</color>\n</resources>\n');
   // splash screens: keep each file's size, replace content
   const walk = d => fs.readdirSync(d, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]);
   for (const f of walk(res).filter(f => path.basename(f) === 'splash.png')) {
